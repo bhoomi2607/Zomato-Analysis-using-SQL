@@ -1,0 +1,276 @@
+--Zomato data analysis 
+CREATE TABLE customers(
+    customer_id INT PRIMARY KEY,
+    customer_name VARCHAR (25),
+    reg_date DATE);
+
+CREATE TABLE restaurants(
+    restaurant_id INT PRIMARY KEY,
+    restaurant_name VARCHAR (35),
+    city VARCHAR(25),
+    opening_hours VARCHAR(55));
+
+CREATE TABLE orders(
+    order_id INT PRIMARY KEY,
+     customer_id INT -- this is coming from the customer table,
+    restaurant_id INT -- this is coming from the restaurant table,
+    order_item VARCHAR (45),
+    order_date DATE,
+    order_time TIME,
+    order_status VARCHAR(25),
+    total_amount FLOAT);
+
+CREATE TABLE riders(
+    rider_id INT PRIMARY KEY,
+    rider_name VARCHAR(55),
+    sign_up DATE);
+
+CREATE TABLE deliveries(
+    delivery_id INT PRIMARY KEY,
+    order_id INT, -- this is coming from orders table
+    delivery_status VARCHAR(35),
+    delivery_time TIME,
+    rider_id INT -- this is coming from riders table
+    DATE);
+
+
+-- adding FK constraints
+ALTER TABLE orders
+ADD CONSTRAINT fk_customers
+FOREIGN KEY (customer_id)
+REFERENCES customers(customer_id)
+    
+ALTER TABLE orders
+ADD CONSTRAINT fk_restaurants
+FOREIGN KEY (restaurant_id)
+REFERENCES restaurants(customer_id)
+
+ALTER TABLE deliveries
+ADD CONSTRAINT fk_orders
+FOREIGN KEY (order_id)
+REFERENCES orders(order_id)
+
+ALTER TABLE deliveries
+ADD CONSTRAINT fk_riders
+FOREIGN KEY (rider_id)
+REFERENCES riders(order_id)    
+    
+--Explore Dataset
+SELECT *  FROM customers;
+SELECT *  FROM restaurants;
+SELECT *  FROM orders;
+SELECT *  FROM riders;
+SELECT *  FROM deliveries;
+
+SELECT COUNT(*) FROM customers
+WHERE customer_name IS NULL
+OR reg_date IS NULL
+
+SELECT COUNT(*) FROM restaurants
+WHERE restaurant_name IS NULL
+OR city IS NULL
+OR opening_hours IS NULL
+
+SELECT * FROM  orders
+WHERE order_item IS NULL
+OR order_date IS NULL
+OR order_time IS NULL
+OR order_status IS NULL
+OR order_amount IS NULL
+
+----other two tables are small so checked for null values manually.
+
+--Questions--
+
+--Q1.  Write a query to find the top 5 most frequently ordered dishes 
+--by a customer called "Arjun Mehta" in the last 1 year.
+SELECT * FROM
+(SELECT 
+    c.customer_name,
+    o.order_item AS dishes,
+    COUNT(*) as total_orders,
+    DENSE_RANK() OVER(ORDER BY COUNT(*) DESC ) as rank
+FROM orders AS O
+JOIN customers as C 
+ON c.customer_id = o.customer_id
+WHERE o.order_date >= CURRENT_DATE - INTERVAL  '1 year'
+AND c.customer_name = 'Arjun Mehta'
+GROUP BY c.customer_name, o.order_item
+ORDER BY total_orders DESC) as t1
+WHERE rank<= 5
+
+-- Q2. Identify the time slots during which the most orders are placed, based on a 2-hour interval
+SELECT * 
+    FLOOR(EXTRACT (HOUR FROM order_time)/2) *2 as start_time,
+    FLOOR(EXTRACT (HOUR FROM order_time)/2) *2 +2 as start_time,
+    COUNT (*) as total_orders
+FROM  orders 
+GROUP BY 1,2
+ORDER BY 3 DESC;
+
+-- Q3. Find the average order value per customer who placed more than 750 orders. 
+-- Return customer_name, and aov (average order value)
+SELECT 
+    c.customer_name,
+    AVG(total_amount) as aov
+FROM  orders o
+JOIN customers c 
+ON c.customer_id = o.order_id   
+GROUP BY customer_name
+HAVING COUNT(o.order_id)  >=750
+
+-- Q4. List the customers who have spent more than 100k in total on food orders.  Return customer_name and total amount spent
+
+SELECT 
+c.customer_name, SUM(o.total_amount) as total_spent
+FROM orders as o 
+JOIN customers as c 
+on c.customer_id = o.customer_id 
+GROUP BY  customer_name
+HAVING SUM(o.total_amount) > 100000
+
+-- Q5. Orders without delivery. Write a query to find orders that were placed but not delivered. Return each restaurant name and the number of not-delivered orders
+SELECT r.restaurant_name, 
+COUNT(o.order_id) as cnt_not_delivered_orders FROM orders as o 
+LEFT JOIN restaurants as r 
+ON r.restaurant_id = o.restaurant_id
+LEFT JOIN deliveries as d 
+ON d.order_id = o.order_id
+WHERE d.delivery_id IS NULL
+GROUP BY 1
+ORDER BY 2 DESC
+
+-- Q6. Restaurant Revenue Ranking: Rank restaurants by their total revenue from the last year, including their name, total revenue, and rank within their city. 
+
+ SELECT 
+r.city, r.restaurant_name,
+SUM(o.total_amount) as revenue,
+RANK() OVER(PARTITION BY r.city, ORDER BY SUM(o.total_amount) DESC) as rank
+FROM orders as o 
+JOIN restaurants as r
+ON r.restaurant_id = o.restaurant_id
+GROUP BY r.city, r.restaurant_name;
+
+-- Q7 . Most popular dish by city: Identify the most popular dish in each city based on the number of orders.
+SELECT * FROM(
+SELECT r.city, o.order_item as dish,
+COUNT(o.order_id) as total_orders,
+ RANK() OVER(PARTITION BY r.city ORDER BY COUNT(o.order_id) DESC )  as rank
+FROM orders as o 
+JOIN restaurants as r 
+ON r.restaurant_id = o.restaurant_id
+GROUP BY r.city, o.order_item;) AS t1
+WHERE rank = 1
+
+--Q8.Find customers who haven't placed an order in 2024 but did in 2023
+SELECT DISTINCT customer_id FROM orders
+WHERE 
+EXTRACT (YEAR FROM order_date) = 2023
+AND customer_id NOT IN 
+(SELECT DISTINCT customer_id FROM orders 
+WHERE EXTRACT(YEAR FROM order_date) = 2024)
+
+--Q9. Rider Average Delivery Time: Determine each rider's average delivery time.
+SELECT o.order_id, 
+    rider_id,
+    o.order_time, 
+    d.delivery_time,
+    o.order_time = d.delivery_time,
+    EXTRACT(EPOCH FROM(d.delivery_time - o.order_time + 
+    CASE WHEN d.delivery_time < o.order_time THEN INTERVAL        '1Day' ELSE INTERVAL '0Day' END ))/60 as time_difference_insec
+FROM  orders as o 
+JOIN deliveries as d 
+ON o.order_id = d.order_id 
+WHERE d.delivery_status = 'Delivered';
+
+--Q.10 Monthly restaurant growth ratio: Calculate each
+--restaurant's growth ratio based on the total number of delivered orders since its joining.
+WITH growth_ratio as (
+SELECT o.restaurant_id, TO_CHAR(o.order_date, 'mm-yy') as month,
+COUNT(o.order_id) as crt_month_orders,
+LAG(COUNT(o.order_id), 1) OVER (PARTITION BY o.restaurant_id ORDER BY TO_CHAR(o.order_id , 'mm-yy')) as prev_month_orders
+FROM orders as o JOIN deliveries as d 
+ON o.order_id = d.order_id 
+WHERE  d.delivery_status = 'Delivered'
+GROUP BY 1, 2
+ORDER BY 1, 2)
+
+SELECT restaurant_id, 
+month, prev_month_orders, 
+cr_month_orders,
+(cr-month_orders : : numeric - prev_month_orders : : numeric) / prev_month_orders : : numeric *100
+FROM growth_rate 
+
+--Q. 11 Customer Segmentation: Segment customers into 'Gold' or 'Silver' groups based on their total spending 
+-- compared to the average order value(AOV). If a customer's total spending exceeds the AOV, label them as 'Gold'; otherwise
+-- label them as 'silver'. Write an SQL query to determine each segment's 
+-- total number of orders and total revenue.
+SELECT cx_category,
+    SUM(total_orders) as total_orders,
+    SUM(total_spent) as total_revenue
+FROM (
+SELECT customer_id, 
+    SUM(total_amount) as total_spent,
+    COUNT(order_id) as total_orders,
+    CASE WHEN SUM(total_amount) > (SELECT AVG(total_amount)FROM orders) 
+    THEN 'Gold' ELSE 'Silver' END AS cx_category
+FROM orders
+GROUP BY 1) as t1
+
+--Q. 12 Riders' monthly earnings: Calculate riders' total monthly earnings, assuming they earn 8% of the order amount.
+SELECT 
+d.rider_id, TO_CHAR(o.order_date, 'mm-yy') as month,
+SUM(total_amount)  as revenue,
+SUM(total_amount) * 0.08 as riders_earning
+FROM orders as o 
+JOIN deliveries as d 
+ON o.order_id = d.order_id
+GROUP BY 1, 2
+ORDER BY 1, 2 DESC
+
+--Q. 13 Analyze order frequency per day of the week and identify the peak fro each restaurant. 
+ SELECT *
+(SELECT 
+r.restaurant_name,
+TO_CHAR(o.order_date, 'Day') as day,
+    COUNT(o.order_id) as total_orders,
+    RANK() OVER(PRATITION BY r.restaurant_name ORDER BY COUNT(o.order_id) DESC ) as rank
+FROM orders as o 
+JOIN restaurants as r 
+ON o.resturant_id = r.restaurant_id
+GROUP BY 1,2
+ORDER BY 1,3 DESC) as t1
+WHERE rank = 1
+
+--Q. 14. Identify sales trends by comparing each month's total sales to the previous month.
+SELECT 
+EXTRACT(YEAR FROM order_date) as year,
+EXTRACT(MONTH FROM order_date) as month,
+SUM( total_amount) as total_sale,
+ LAG(SUM(total_amount), 1) OVER (ORDER BY EXTRACT(YEAR FROM order_date), 
+EXTRACT(MONTH FROM order_date)) as prev_month_sales  
+FROM orders
+GROUP BY 1, 2
+
+-- Q.15 Evaluate rider efficiency by determining average delivery times and identifying those with the lowest and highest averages.
+WITH new_table AS (
+    SELECT *, 
+    d.rider_id as riders_id,
+    EXTRACT (EPOCH FROM (d.delivery_time - o.order_time + 
+    CASE WHEN d.delivery_time < o.order_time THEN INTERVAL '1day ' ELSE
+    INTERVAL '0 day' END)) / 60 as time_deliver
+    FROM orders as o 
+    JOIN  deliveries as d
+    ON o.order_id = d.order_id 
+    WHERE d.delivery_status = 'Delivered'
+), riders_time AS 
+(
+    SELECT riders_id, AVG(time_deliver) avg_time
+    FROM new_table
+    GROUP BY 1
+) 
+SELECT 
+MIN(avg_time),
+MAX(avg_time)
+FROM riders_time
+
